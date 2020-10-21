@@ -12,9 +12,13 @@ the only dependencies are python 3 and the two libraries in `requirements.txt`, 
 ## configuration
 
 copy `envvars.sample` to `.envvars` and set all of the variables:
+
 `JUMPBOT_DISCORD_TOKEN` is from the Discord developer portal after creating a bot within an app
+
 `JUMPBOT_DISCORD_IDS` is a list of all IDs that your bot has (copied message text appears to have a separate ID from a native mention)
+
 `JUMPBOT_POPULAR_SYSTEMS` is a list of all systems you'd like to offer routes from when a starting system is not provided (see below)
+
 `JUMPBOT_TRIGGER_ROLES` is a list of tuples containing `('id', 'description')` (the description is for documentation only, it's never used). these are the IDs of roles you'd like jumpbot to proactively offer routes for when pinged (see below)
 
 ## data sources
