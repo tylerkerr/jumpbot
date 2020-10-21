@@ -1,0 +1,14 @@
+[Unit]
+Description=jumpbot Discord bot for Eve
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/etc/jumpbot
+Environment="PATH=/etc/jumpbot/env/bin:/usr/bin/"
+EnvironmentFile=/etc/jumpbot/.envvars
+ExecStart=/etc/jumpbot/env/bin/python /etc/jumpbot/jumpbot.py
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# Python virtual environment
+env/
+
+# Python compiled/cache
+__pycache__/
+*.pyc
+
+# Editors
+.vscode
+
+# Config
+.envvars
+
+# Content, default paths
+data/graph.cache
