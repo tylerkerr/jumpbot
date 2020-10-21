@@ -41,7 +41,7 @@ Show all hops in a path: `@jumpbot path taisy alikara`
 
 ![](https://bearand.com/jumpbot/jumpbot-path.png)
 
-Autocomplete: `@jumpbot alik ostin`
+Autocomplete: `@jumpbot alik w-u`
 
 ![](https://bearand.com/jumpbot/jumpbot-autocomplete.png)
 
