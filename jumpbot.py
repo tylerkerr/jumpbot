@@ -7,6 +7,7 @@ import time
 import traceback
 import dijkstar
 import discord
+import itertools
 from re import sub as re_sub
 from math import copysign
 
@@ -164,11 +165,12 @@ def fixup_system_name(system: str):
     if system in stars:
         return system
     if not system in stars:
-        try:
+        flat = flatten(system)
+        if flat in flat_lookup:
             lookup = flat_lookup[flatten(system)]
             system_fixups[system] = lookup
             return lookup
-        except KeyError:
+        else:
             return False
 
 valid_systems = []
@@ -185,18 +187,6 @@ def is_valid_system(system: str):
 
 
 # ----- string formatting -----
-
-def format_path_hops(start: str, end: str):
-    hops = jump_path(start, end)['path'].nodes
-    response = "```"
-    i = 0
-    for hop in hops:
-        hop_sec = get_rounded_sec(hop)
-        response += f"{i}) {hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
-        i += 1
-    response += '```'
-    return response
-
 
 def format_path_security(sec_dict: dict):
     # return f"{sec_dict['hisec']} hisec, {sec_dict['lowsec']} lowsec, {sec_dict['nullsec']} nullsec"
@@ -218,7 +208,7 @@ def format_system_info(start: str, end: str):
     if start in popular_systems:
         return f"`{end}` is in **{stars[end]['region']}**\n"
     elif stars[start]['region'] == stars[end]['region']:
-        return f"{start} and {end} are both in **{stars[start]['region']}**\n"
+        return f"`{start}` and `{end}` are both in **{stars[start]['region']}**\n"
     else:
         return f"`{start}` is in **{stars[start]['region']}**, `{end}` is in **{stars[end]['region']}**\n"
 
@@ -242,8 +232,65 @@ def format_partial_match(matches: list):
     return response
 
 
+def format_e2e(system: str):
+    guessed_system = False
+    canonical_system = False
+    oh_mixup = False
+    warnings = []
+    if is_valid_system(system):
+        canonical_system = fixup_system_name(system)
+        oh_mixup = check_oh_mixup(system)
+    else:
+        fuzzy = try_fuzzy_match(system)
+        if fuzzy and len(fuzzy) == 1:
+            canonical_system = fixup_system_name(fuzzy[0])
+            oh_mixup = check_oh_mixup(merge_fuzzy(system, fuzzy[0]))
+        elif fuzzy and len(fuzzy) > 1:
+            warnings.append(format_partial_match(fuzzy))
+        elif not fuzzy:
+            warnings.append(format_unknown_system(system))
+    if oh_mixup:
+        warnings.append(format_oh_mixup(merge_fuzzy(system, guessed_system) if guessed_system else system, canonical_system))
+    return canonical_system, warnings
+
+
+def format_path_hops(start: str, end: str):
+    hops = jump_path(start, end)['path'].nodes
+    response = "```"
+    hop_count = 0
+    for hop in hops:
+        hop_sec = get_rounded_sec(hop)
+        response += f"{hop_count}) {hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        hop_count += 1
+    response += '```'
+    return response
+
+
+def format_multistop_path(legs: list, stops: list):
+    hops = []
+    response = "```"
+
+    leg_count = 0
+    for leg in legs:
+        if leg_count == 0:
+            hops += jump_path(leg[0], leg[1])['path'].nodes
+        else:
+            hops += jump_path(leg[0], leg[1])['path'].nodes[1:]
+        leg_count += 1
+
+    hop_count = 0
+    for hop in hops:
+        hop_sec = get_rounded_sec(hop)
+        response += f"{hop_count}) {'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        hop_count += 1
+
+    response += "```"
+    return response
+
+
 def format_unknown_system(provided: str):
-    return f":question: Unknown system '{provided}'"
+    return f":question: Unknown system '{provided}'\n"
+
 
 def format_oh_mixup(provided: str, corrected: str):
     return f":grey_exclamation: `O`/`0` mixup: you said `{provided}`, you meant `{corrected}`\n"
@@ -266,6 +313,7 @@ def help():
     response = ('Jump counts from relevant systems:   `@jumpbot [system]`\n'
                 'Jump counts between a specific pair:  `@jumpbot Jita Alikara`\n'
                 'Systems with spaces in their name:     `@jumpbot "New Caldari" Taisy`\n'
+                'Multi-stop route:                                      `@jumpbot Taisy Alikara Jita`\n'
                 'Show all hops in a path:                          `@jumpbot path taisy alikara`\n'
                 'Autocomplete:                                          `@jumpbot alik ostin`\n'
                 'Partial match suggestions:                     `@jumpbot vv`\n\n'
@@ -275,59 +323,30 @@ def help():
     return response
 
 
-def calc_e2e(start: str, end: str, include_path=False, loop_counter=0):
+def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
     # return jump info for a specified pair of systems
     response = ""
-    guessed_start = None
-    guessed_end = None
+    warnings = []
 
-    if not is_valid_system(start):
-        fuzzy = try_fuzzy_match(start)
-        if not fuzzy:
-            if loop_counter < 2:
-                return format_unknown_system(start)
-            else:
-                return
-        elif len(fuzzy) == 1:
-            start_oh_mixup = check_oh_mixup(merge_fuzzy(start, fuzzy[0]))
-            guessed_start = fuzzy[0]
-        elif len(fuzzy) > 1:
-            if loop_counter < 2:
-                return format_partial_match(fuzzy)
-            else:
-                return
+    canonical_start, system_warnings = format_e2e(start)
+    if not canonical_start:
+        return ''.join(system_warnings)
     else:
-        start_oh_mixup = check_oh_mixup(start)
+        [warnings.append(s_w) for s_w in system_warnings]
 
-    if not is_valid_system(end):
-        fuzzy = try_fuzzy_match(end)
-        if not fuzzy:
-            if loop_counter < 2:
-                return format_unknown_system(end)
-            else:
-                return
-        elif len(fuzzy) == 1:
-            end_oh_mixup = check_oh_mixup(merge_fuzzy(end, fuzzy[0]))
-            guessed_end = fuzzy[0]
-        elif len(fuzzy) > 1:
-            if loop_counter < 2:
-                return format_partial_match(fuzzy)
-            else:
-                return
+    canonical_end, system_warnings = format_e2e(end)
+    if not canonical_end:
+        return ''.join(system_warnings)
     else:
-        end_oh_mixup = check_oh_mixup(end)
-
-    canonical_start = fixup_system_name(guessed_start if guessed_start else start)
-    canonical_end = fixup_system_name(guessed_end if guessed_end else end)
+        [warnings.append(s_w) for s_w in system_warnings]
 
     if canonical_start == canonical_end:
         return
-    if loop_counter < 2:
+
+    if show_extras == True:
+        if len(warnings) > 0:
+            response += ''.join(warnings)
         response += format_system_info(canonical_start, canonical_end)
-        if start_oh_mixup:
-            response += format_oh_mixup(merge_fuzzy(start, guessed_start) if guessed_start else start, canonical_start)
-        if end_oh_mixup:
-            response += format_oh_mixup(merge_fuzzy(end, guessed_end) if guessed_end else end, canonical_end)
 
     response += f"{format_jump_count(canonical_start, canonical_end)}"
     if include_path:
@@ -338,12 +357,47 @@ def calc_e2e(start: str, end: str, include_path=False, loop_counter=0):
 def calc_from_popular(end: str):
     # return jump info for the defined set of interesting/popular systems
     response = ""
-    count = 0
+    extras = True
     for start in popular_systems:
-        count += 1
-        result = calc_e2e(start, end, loop_counter=count)
+        result = calc_e2e(start, end, show_extras=extras)
+        extras = False
         if result:
             response += result
+    return response
+
+
+def calc_multistop(stops: list, include_path=False):
+    valid_stops = []
+    warnings = []
+    for system in [re_sub(punctuation_to_strip, '', s) for s in stops]:
+        canonical_system, system_warnings = format_e2e(system)
+        if system_warnings:
+            [warnings.append(s_w) for s_w in system_warnings]
+        if canonical_system:
+            valid_stops.append(canonical_system)
+
+    candidate_legs = list(zip(valid_stops, valid_stops[1:]))
+
+    legs = []
+    for leg in candidate_legs:
+        if leg[0] != leg[1]:
+            legs.append(leg)
+
+    response = ''.join(set(warnings))   # merge duplicate warnings
+    response += format_system_info(valid_stops[0], valid_stops[-1])
+
+    jump_total = 0
+    nullsec_total = 0
+    for leg in legs:
+        path = jump_path(leg[0], leg[1])
+        nullsec_total += path['security']['nullsec']
+        jump_total += jump_count(path)
+        response += calc_e2e(leg[0], leg[1], show_extras=False)
+    response += f"\n__**{jump_total} jumps total**__ ({nullsec_total} nullsec)"
+
+    if include_path:
+        response += format_multistop_path(legs, valid_stops)
+
     return response
 
 
@@ -399,12 +453,12 @@ def mention_trigger(message):
         write_log('e2e-withpath' if include_path else 'e2e', message)
     elif len(msg_args) >= 3:                # "@jumpbot D7 jita ostingele
         try:
-            # TODO multistop
-            assert True == False
+            response = calc_multistop(msg_args, include_path)
             write_log('multistop-withpath' if include_path else 'multistop', message)
-        except:
+        except Exception as e:
             response = "?:)"
             write_log('error-parse', message)
+            print(e, ''.join(traceback.format_tb(e.__traceback__)))
     if not response:
         write_log('error-empty', message)
         response = "?:)?"

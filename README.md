@@ -37,6 +37,10 @@ Systems with spaces in their name: `@jumpbot "New Caldari" Taisy`
 
 ![](https://bearand.com/jumpbot/jumpbot-spaces.png)
 
+Multi-stop route: `@jumpbot taisy alikara jita`
+
+![](https://bearand.com/jumpbot/jumpbot-multistop.png)
+
 Show all hops in a path: `@jumpbot path taisy alikara`
 
 ![](https://bearand.com/jumpbot/jumpbot-path.png)
