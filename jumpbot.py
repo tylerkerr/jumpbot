@@ -204,7 +204,7 @@ def format_sec_icon(rounded_sec: str):
         return '🟥'
 
 
-def format_system_info(start: str, end: str):
+def format_system_region(start: str, end: str):
     if start in popular_systems:
         return f"`{end}` is in **{stars[end]['region']}**\n"
     elif stars[start]['region'] == stars[end]['region']:
@@ -232,7 +232,8 @@ def format_partial_match(matches: list):
     return response
 
 
-def format_e2e(system: str):
+def format_system(system: str):
+    # figure out the actual system being routed to plus any warnings
     guessed_system = False
     canonical_system = False
     oh_mixup = False
@@ -255,18 +256,20 @@ def format_e2e(system: str):
 
 
 def format_path_hops(start: str, end: str):
+    # generate the full route
     hops = jump_path(start, end)['path'].nodes
     response = "```"
     hop_count = 0
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
-        response += f"{hop_count}) {hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
         hop_count += 1
     response += '```'
     return response
 
 
 def format_multistop_path(legs: list, stops: list):
+    # generate the full route with indicators for the specified stops
     hops = []
     response = "```"
 
@@ -281,7 +284,7 @@ def format_multistop_path(legs: list, stops: list):
     hop_count = 0
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
-        response += f"{hop_count}) {'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
         hop_count += 1
 
     response += "```"
@@ -296,13 +299,22 @@ def format_oh_mixup(provided: str, corrected: str):
     return f":grey_exclamation: `O`/`0` mixup: you said `{provided}`, you meant `{corrected}`\n"
 
 
-# ----- bot logic -----
+def punc_strip(word: str):
+    return re_sub(punctuation_to_strip, '', word)
 
+
+def check_response_length(response: str):
+    if len(response) > 1975:
+        return response[:1975] + '\nToo long! Truncating...'
+    return response
+
+
+# ----- bot logic -----
 
 def write_log(logic, message):
     # plain old stdout print to be caught by systemd or rsyslog
     source_string = f"{message.guild.name} #{message.channel.name} {message.author.name}#{message.author.discriminator}"
-    for term in shlex.split(message.content):
+    for term in message.content.split(' '):
         if any(id in term for id in jumpbot_discord_ids + trigger_roles):
             mention_id = term
             break
@@ -328,15 +340,15 @@ def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
     response = ""
     warnings = []
 
-    canonical_start, system_warnings = format_e2e(start)
+    canonical_start, system_warnings = format_system(start)
     if not canonical_start:
-        return ''.join(system_warnings)
+        return ''.join(system_warnings) if show_extras else None
     else:
         [warnings.append(s_w) for s_w in system_warnings]
 
-    canonical_end, system_warnings = format_e2e(end)
+    canonical_end, system_warnings = format_system(end)
     if not canonical_end:
-        return ''.join(system_warnings)
+        return ''.join(system_warnings) if show_extras else None
     else:
         [warnings.append(s_w) for s_w in system_warnings]
 
@@ -346,9 +358,10 @@ def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
     if show_extras == True:
         if len(warnings) > 0:
             response += ''.join(warnings)
-        response += format_system_info(canonical_start, canonical_end)
+        response += format_system_region(canonical_start, canonical_end)
 
     response += f"{format_jump_count(canonical_start, canonical_end)}"
+
     if include_path:
         response += format_path_hops(canonical_start, canonical_end)
     return response + '\n'
@@ -357,34 +370,39 @@ def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
 def calc_from_popular(end: str):
     # return jump info for the defined set of interesting/popular systems
     response = ""
-    extras = True
+    show_extras = True      # region & warnings
     for start in popular_systems:
-        result = calc_e2e(start, end, show_extras=extras)
-        extras = False
+        result = calc_e2e(start, end, show_extras=show_extras)
+        show_extras = False # only on first loop
         if result:
             response += result
     return response
 
 
 def calc_multistop(stops: list, include_path=False):
+    # return jump info for an arbitrary amount of stops
     valid_stops = []
     warnings = []
     for system in [re_sub(punctuation_to_strip, '', s) for s in stops]:
-        canonical_system, system_warnings = format_e2e(system)
+        canonical_system, system_warnings = format_system(system)
         if system_warnings:
-            [warnings.append(s_w) for s_w in system_warnings]
+            [warnings.append(s_w + '\n') for s_w in system_warnings]
         if canonical_system:
             valid_stops.append(canonical_system)
+
+    if len(valid_stops) < 2:
+        return
 
     candidate_legs = list(zip(valid_stops, valid_stops[1:]))
 
     legs = []
     for leg in candidate_legs:
-        if leg[0] != leg[1]:
+        if leg[0] and leg[1] and leg[0] != leg[1]:
             legs.append(leg)
 
     response = ''.join(set(warnings))   # merge duplicate warnings
-    response += format_system_info(valid_stops[0], valid_stops[-1])
+    if legs:
+        response += format_system_region(valid_stops[0], valid_stops[-1])
 
     jump_total = 0
     nullsec_total = 0
@@ -393,28 +411,37 @@ def calc_multistop(stops: list, include_path=False):
         nullsec_total += path['security']['nullsec']
         jump_total += jump_count(path)
         response += calc_e2e(leg[0], leg[1], show_extras=False)
-    response += f"\n__**{jump_total} jumps total**__ ({nullsec_total} nullsec)"
+    if jump_total:
+        response += f"\n__**{jump_total} jumps total**__ ({nullsec_total} nullsec)"
 
     if include_path:
-        response += format_multistop_path(legs, valid_stops)
+        multistop = format_multistop_path(legs, valid_stops)
+        if len(response + multistop) > 2000:
+            response += "\n_Can't show the full path - too long for a single Discord message_ :("
+        else:
+            response += format_multistop_path(legs, valid_stops)
 
     return response
 
 
 def fleetping_trigger(message):
     response = ""
-    for line in message.content.split('\n'):
-        for word in [re_sub(punctuation_to_strip, '', w) for w in line.split(' ')]:
-            if is_valid_system(word):
-                if fixup_system_name(word) not in popular_systems:
-                    response += calc_from_popular(word)
-            else:
-                # only check words longer than 3 chars or we start false positive matching english words (e.g. 'any' -> Anyed)
-                if len(word) > 3 and word.lower() not in fuzzy_match_denylist:
-                    fuzzy = try_fuzzy_match(word)
-                    if fuzzy and len(fuzzy) == 1:
-                        if fixup_system_name(fuzzy[0]) not in popular_systems:
-                            response += calc_from_popular(word)
+    words = set([punc_strip(word) for line in message.content.split('\n') for word in line.split(' ')])
+    for word in words:
+        if is_valid_system(word):
+            if fixup_system_name(word) not in popular_systems:
+                response += calc_from_popular(word)
+                if len(response) > 1:
+                    response += '\n'
+        else:
+            # only check words longer than 3 chars or we start false positive matching english words (e.g. 'any' -> Anyed)
+            if len(word) > 3 and word.lower() not in fuzzy_match_denylist:
+                fuzzy = try_fuzzy_match(word)
+                if fuzzy and len(fuzzy) == 1:
+                    if fixup_system_name(fuzzy[0]) not in popular_systems:
+                        response += calc_from_popular(word)
+                        if len(response) > 1:
+                            response += '\n'
     if response:
         write_log('fleetping', message)
         return response
@@ -424,7 +451,10 @@ def fleetping_trigger(message):
 
 
 def mention_trigger(message):
-    msg_args = shlex.split(message.content)
+    try:
+        msg_args = shlex.split(message.content)
+    except:
+        msg_args = re_sub('[\'\"]', '', message.content).split(' ')
     for arg in msg_args:
         if any(id in arg for id in jumpbot_discord_ids):
             # remove the jumpbot mention to allow leading or trailing mentions
@@ -452,13 +482,17 @@ def mention_trigger(message):
         response = calc_e2e(msg_args[0], msg_args[1], include_path)
         write_log('e2e-withpath' if include_path else 'e2e', message)
     elif len(msg_args) >= 3:                # "@jumpbot D7 jita ostingele
-        try:
-            response = calc_multistop(msg_args, include_path)
-            write_log('multistop-withpath' if include_path else 'multistop', message)
-        except Exception as e:
-            response = "?:)"
-            write_log('error-parse', message)
-            print(e, ''.join(traceback.format_tb(e.__traceback__)))
+        if len(msg_args) > 24:
+            response = '24 hops max!'
+            write_log('error-long', message)
+        else:
+            try:
+                response = calc_multistop(msg_args, include_path)
+                write_log('multistop-withpath' if include_path else 'multistop', message)
+            except Exception as e:
+                response = "?:)"
+                write_log('error-parse', message)
+                print(e, ''.join(traceback.format_tb(e.__traceback__)))
     if not response:
         write_log('error-empty', message)
         response = "?:)?"
@@ -520,12 +554,12 @@ def main():
                 # proactively offer info when an interesting role is pinged
                 response = fleetping_trigger(message)
                 if response:
-                    await message.channel.send(response)
+                    await message.channel.send(check_response_length(response))
 
             elif any(id in message.content for id in jumpbot_discord_ids):
                 # we were mentioned
                 response = mention_trigger(message)
-                await message.channel.send(response)
+                await message.channel.send(check_response_length(response))
 
         except Exception as e:
             write_log('error-exception', message)
