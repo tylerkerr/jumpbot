@@ -312,6 +312,8 @@ def check_response_length(response: str):
 # ----- bot logic -----
 
 def write_log(logic, message):
+    if logging_enabled == False:
+        return
     # plain old stdout print to be caught by systemd or rsyslog
     source_string = f"{message.guild.name} #{message.channel.name} {message.author.name}#{message.author.discriminator}"
     for term in message.content.split(' '):
@@ -523,6 +525,8 @@ def init():
     global trigger_roles
     trigger_roles = [role[0] for role in ast.literal_eval(
         os.environ.get("JUMPBOT_TRIGGER_ROLES"))]
+    global logging_enabled
+    logging_enabled = True if os.environ.get("JUMPBOT_DEBUG_LOGGING") == 'True' else False
 
 
 def main():
@@ -540,8 +544,9 @@ def main():
     async def on_ready():
         print(f'[+] {client.user.name} has connected to the discord API')
         for guild in client.guilds:
-            print(
-                f'[+] joined {guild.name} [{guild.id}, {guild.member_count} members]')
+            print(f'[+] joined {guild.name} [{guild.id}]')
+        if logging_enabled:
+            print("[+] Logging is active!")
 
     @client.event
     async def on_message(message):
