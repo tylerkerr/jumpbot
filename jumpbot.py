@@ -14,8 +14,8 @@ from math import copysign
 # where to save a calculated graph
 graph_save_path = './data/graph.cache'
 
-# there's a system called Gateway that we don't want to auto-recognize when people say 'gate'
-fuzzy_match_denylist = ['gate']
+# systems we don't want fuzzy matching to hit on in fleetping triggers
+fuzzy_match_denylist = ['gate', 'serpentis']
 
 # when fuzzy matching chats to system names, ignore these chars
 punctuation_to_strip = '[.,;:!\'"]'
