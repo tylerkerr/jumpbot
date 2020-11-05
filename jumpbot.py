@@ -288,7 +288,7 @@ def format_path_hops(start: str, end: str, avoid_null=False):
     return response
 
 
-def format_multistop_path(legs: list, stops: list):
+def format_multistop_path(legs: list, stops: list, avoid_null=False):
     # generate the full route with indicators for the specified stops
     hops = []
     response = "```"
@@ -296,9 +296,9 @@ def format_multistop_path(legs: list, stops: list):
     leg_count = 0
     for leg in legs:
         if leg_count == 0:
-            hops += jump_path(leg[0], leg[1])['path'].nodes
+            hops += jump_path(leg[0], leg[1], avoid_null)['path'].nodes
         else:
-            hops += jump_path(leg[0], leg[1])['path'].nodes[1:]
+            hops += jump_path(leg[0], leg[1], avoid_null)['path'].nodes[1:]
         leg_count += 1
 
     hop_count = 0
@@ -447,16 +447,16 @@ def calc_multistop(stops: list, include_path=False, avoid_null=False):
         path = jump_path(leg[0], leg[1], avoid_null=avoid_null)
         nullsec_total += path['security']['nullsec']
         jump_total += jump_count(path)
-        response += calc_e2e(leg[0], leg[1], show_extras=False)
+        response += calc_e2e(leg[0], leg[1], show_extras=False, avoid_null=avoid_null)
     if jump_total:
         response += f"\n__**{jump_total} jumps total**__ ({nullsec_total} nullsec)"
 
     if include_path:
-        multistop = format_multistop_path(legs, valid_stops)
+        multistop = format_multistop_path(legs, valid_stops, avoid_null=avoid_null)
         if len(response + multistop) > 2000:
             response += "\n_Can't show the full path - too long for a single Discord message_ :("
         else:
-            response += format_multistop_path(legs, valid_stops)
+            response += format_multistop_path(legs, valid_stops, avoid_null=avoid_null)
 
     return response
 
@@ -532,7 +532,7 @@ def mention_trigger(message):
             write_log('error-long', message)
         else:
             try:
-                response = calc_multistop(msg_args, include_path)
+                response = calc_multistop(msg_args, include_path, avoid_null)
                 write_log('multistop-withpath' if include_path else 'multistop', message)
             except Exception as e:
                 response = "?:)"
