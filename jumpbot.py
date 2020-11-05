@@ -13,6 +13,7 @@ from math import copysign
 
 # where to save a calculated graph
 graph_save_path = './data/graph.cache'
+safe_graph_save_path = './data/safe_graph.cache'
 
 # systems we don't want fuzzy matching to hit on in fleetping triggers
 fuzzy_match_denylist = ['gate', 'serpentis', 'semi', 'time', 'promise']
@@ -22,6 +23,9 @@ punctuation_to_strip = '[.,;:!\'"]'
 
 # strings to trigger the output of a detailed path. important that none of these collide with systems!
 path_terms = ['path', 'detail', 'full', 'hops']
+
+# strings to trigger the output of a detailed path. important that none of these collide with systems!
+safe_terms = ['safe', 'safer', 'lowsec', 'hisec']
 
 # ----- preparation -----
 
@@ -59,18 +63,34 @@ def generate_graph(stars):
     return graph
 
 
+def generate_safe_graph(stars):
+    safe_graph = dijkstar.Graph()
+    for star in stars:
+        for edge in stars[star]['edges']:
+            edge_sec = get_rounded_sec(edge)
+            if get_sec_status(edge_sec) == 'nullsec':
+                cost = 10000
+            else:
+                cost = 1
+            safe_graph.add_edge(star, edge, cost)
+
+    safe_graph.dump(safe_graph_save_path)
+    return safe_graph
+
+
 # ----- dijkstra crunching -----
 
-def jump_path(start: str, end: str):
+def jump_path(start: str, end: str, avoid_null=False):
     # generate a dijkstar object describing the shortest path
-    path = dijkstar.find_path(graph, start, end)
+    g = safe_graph if avoid_null else graph
+    path = dijkstar.find_path(g, start, end)
     security_dict = jump_path_security(path)
     return {'path': path, 'security': security_dict}
 
 
 def jump_count(path):
     # the number of jumps between two systems
-    return path['path'].total_cost
+    return len(path['path'].nodes) - 1  # don't include the starting node
 
 
 # ----- system security math -----
@@ -213,11 +233,11 @@ def format_system_region(start: str, end: str):
         return f"`{start}` is in **{stars[start]['region']}**, `{end}` is in **{stars[end]['region']}**\n"
 
 
-def format_jump_count(start: str, end: str):
+def format_jump_count(start: str, end: str, avoid_null=False):
     # assemble all of the useful info into a string for Discord
     start_sec = get_rounded_sec(start)
     end_sec = get_rounded_sec(end)
-    path = jump_path(start, end)
+    path = jump_path(start, end, avoid_null)
     return f"`{start}` ({start_sec} {format_sec_icon(start_sec)}) to `{end}` ({end_sec} {format_sec_icon(end_sec)}): **{jump_count(path)} jumps** ({format_path_security(path['security'])})"
 
 
@@ -255,9 +275,9 @@ def format_system(system: str):
     return canonical_system, warnings
 
 
-def format_path_hops(start: str, end: str):
+def format_path_hops(start: str, end: str, avoid_null=False):
     # generate the full route
-    hops = jump_path(start, end)['path'].nodes
+    hops = jump_path(start, end, avoid_null)['path'].nodes
     response = "```"
     hop_count = 0
     for hop in hops:
@@ -329,15 +349,15 @@ def help():
                 'Systems with spaces in their name:     `@jumpbot "New Caldari" Taisy`\n'
                 'Multi-stop route:                                      `@jumpbot Taisy Alikara Jita`\n'
                 'Show all hops in a path:                          `@jumpbot path taisy alikara`\n'
+                'Find a safer path (if possible):               `@jumpbot taisy czdj safe`\n'
                 'Autocomplete:                                          `@jumpbot alik ostin`\n'
                 'Partial match suggestions:                     `@jumpbot vv`\n\n'
                 '_jumpbot is case-insensitive_\n'
-                '_all paths calculated are currently **shortest** - safety is not considered_\n'
                 '_message <@142846487582212096> with bugs or suggestions_ :cowboy:')
     return response
 
 
-def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
+def calc_e2e(start: str, end: str, include_path=False, avoid_null=False, show_extras=True):
     # return jump info for a specified pair of systems
     response = ""
     warnings = []
@@ -362,10 +382,25 @@ def calc_e2e(start: str, end: str, include_path=False, show_extras=True):
             response += ''.join(warnings)
         response += format_system_region(canonical_start, canonical_end)
 
-    response += f"{format_jump_count(canonical_start, canonical_end)}"
+    response += f"{format_jump_count(canonical_start, canonical_end, avoid_null)}"
 
     if include_path:
-        response += format_path_hops(canonical_start, canonical_end)
+        response += format_path_hops(canonical_start, canonical_end, avoid_null)
+    if avoid_null:
+        safe_path = jump_path(canonical_start, canonical_end, avoid_null=True)
+        safe_hops = jump_count(safe_path)
+        safe_nulls = safe_path['security']['nullsec']
+        unsafe_path = jump_path(canonical_start, canonical_end, avoid_null=False)
+        unsafe_hops = jump_count(unsafe_path)
+        unsafe_nulls = unsafe_path['security']['nullsec']
+        if not include_path:
+            response += '\n'
+        if safe_nulls < unsafe_nulls:
+            response += f"_{unsafe_nulls - safe_nulls} fewer nullsec hops at the cost of {safe_hops - unsafe_hops} additional jumps_"
+        elif safe_nulls == unsafe_nulls:
+            response += "_The shortest path is already the safest!_"
+        elif safe_nulls > unsafe_nulls:
+            response += "_Somehow it's shorter to fly safer? Something is wrong_"
     return response + '\n'
 
 
@@ -381,7 +416,7 @@ def calc_from_popular(end: str):
     return response
 
 
-def calc_multistop(stops: list, include_path=False):
+def calc_multistop(stops: list, include_path=False, avoid_null=False):
     # return jump info for an arbitrary amount of stops
     valid_stops = []
     warnings = []
@@ -409,7 +444,7 @@ def calc_multistop(stops: list, include_path=False):
     jump_total = 0
     nullsec_total = 0
     for leg in legs:
-        path = jump_path(leg[0], leg[1])
+        path = jump_path(leg[0], leg[1], avoid_null=avoid_null)
         nullsec_total += path['security']['nullsec']
         jump_total += jump_count(path)
         response += calc_e2e(leg[0], leg[1], show_extras=False)
@@ -463,12 +498,20 @@ def mention_trigger(message):
             msg_args.remove(arg)
 
     include_path = False
+    avoid_null = False
     if len(msg_args) >= 2:  # figure out if they want us to include all hops in the path
         for arg in msg_args:
             if any(term in arg.lower() for term in path_terms):
                 path_string = arg
                 msg_args.remove(path_string)
                 include_path = True         # "@jumpboth path w-u"
+                break
+
+        for arg in msg_args:
+            if any(term in arg.lower() for term in safe_terms):
+                safe_string = arg
+                msg_args.remove(safe_string)
+                avoid_null = True           # "@jumpboth safe w-u taisy"
                 break
 
     if len(msg_args) == 1:
@@ -481,7 +524,7 @@ def mention_trigger(message):
                 response += "\n_provide both a start and an end if you want to see the full path :)_"
             write_log('popular', message)
     elif len(msg_args) == 2:                # "@jumpbot Taisy Alikara"
-        response = calc_e2e(msg_args[0], msg_args[1], include_path)
+        response = calc_e2e(msg_args[0], msg_args[1], include_path, avoid_null)
         write_log('e2e-withpath' if include_path else 'e2e', message)
     elif len(msg_args) >= 3:                # "@jumpbot D7 jita ostingele
         if len(msg_args) > 24:
@@ -516,6 +559,11 @@ def init():
         graph = dijkstar.Graph.load(graph_save_path)
     else:
         graph = generate_graph(stars)
+    global safe_graph
+    if os.path.isfile(safe_graph_save_path):
+        safe_graph = dijkstar.Graph.load(safe_graph_save_path)
+    else:
+        safe_graph = generate_safe_graph(stars)
     global popular_systems
     popular_systems = ast.literal_eval(
         os.environ.get("JUMPBOT_POPULAR_SYSTEMS"))

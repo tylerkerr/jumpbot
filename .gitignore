@@ -13,3 +13,4 @@ __pycache__/
 
 # Content, default paths
 data/graph.cache
+data/safe_graph.cache
