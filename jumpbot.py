@@ -15,7 +15,7 @@ from math import copysign
 graph_save_path = './data/graph.cache'
 
 # systems we don't want fuzzy matching to hit on in fleetping triggers
-fuzzy_match_denylist = ['gate', 'serpentis']
+fuzzy_match_denylist = ['gate', 'serpentis', 'semi']
 
 # when fuzzy matching chats to system names, ignore these chars
 punctuation_to_strip = '[.,;:!\'"]'
