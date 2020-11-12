@@ -16,7 +16,7 @@ graph_save_path = './data/graph.cache'
 safe_graph_save_path = './data/safe_graph.cache'
 
 # systems we don't want fuzzy matching to hit on in fleetping triggers
-fuzzy_match_denylist = ['gate', 'serpentis', 'semi', 'time', 'promise']
+fuzzy_match_denylist = ['gate', 'serpentis', 'semi', 'time', 'promise', 'vale']
 
 # when fuzzy matching chats to system names, ignore these chars
 punctuation_to_strip = '[.,;:!\'"]'
