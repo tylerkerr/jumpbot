@@ -27,6 +27,12 @@ path_terms = ['path', 'detail', 'full', 'hops']
 # strings to trigger the output of a detailed path. important that none of these collide with systems!
 safe_terms = ['safe', 'safer', 'lowsec', 'hisec']
 
+# strings to trigger a search for the closest non-null system
+non_null_terms = ['escape', 'evac', 'evacuate']
+
+# strings to trigger a search for the closest ITC
+itc_terms = ['itc', 'trade', 'market']
+
 # ----- preparation -----
 
 def parse_star_csv():
@@ -53,6 +59,17 @@ def parse_truesec_csv():
     return stars_truesec
 
 
+def parse_itc_csv():
+    itcs = {}
+    with open('data/itcs.csv') as itccsv:
+        csvreader = csv.reader(itccsv, quotechar='"')
+        next(csvreader)     # skip header row
+        for row in csvreader:
+            itcs[row[0]] = {'planet': row[1],
+                            'moon': row[2],
+                            'station': row[3]}
+    return itcs
+
 def generate_graph(stars):
     graph = dijkstar.Graph()
     for star in stars:
@@ -78,7 +95,7 @@ def generate_safe_graph(stars):
     return safe_graph
 
 
-# ----- dijkstra crunching -----
+# ----- graph crunching -----
 
 def jump_path(start: str, end: str, avoid_null=False):
     # generate a dijkstar object describing the shortest path
@@ -92,6 +109,55 @@ def jump_count(path):
     # the number of jumps between two systems
     return len(path['path'].nodes) - 1  # don't include the starting node
 
+closest_safes = {}
+def closest_safe_system(start):
+    # breadth first search to identify the closest non-nullsec system
+    if start in closest_safes:
+      return closest_safes[start]
+    
+    visited = []
+    queue = [[start]]
+ 
+    while queue:
+        path = queue.pop(0)
+        node = path[-1]
+        if node not in visited:
+            neighbors = stars[node]['edges']
+            for neighbor in neighbors:
+                new_path = list(path)
+                new_path.append(neighbor)
+                queue.append(new_path)
+                if get_sec_status(get_rounded_sec(neighbor)) != 'nullsec':
+                    closest_safes[start] = neighbor
+                    return neighbor
+            visited.append(node)
+ 
+    return False
+
+
+def closest_itcs(start, count):
+    if start in closest_safes:
+      return closest_safes[start]
+    
+    visited = []
+    queue = [[start]]
+
+    found_itcs = []
+ 
+    while queue and len(found_itcs) < count:
+        path = queue.pop(0)
+        node = path[-1]
+        if node not in visited:
+            neighbors = stars[node]['edges']
+            for neighbor in neighbors:
+                new_path = list(path)
+                new_path.append(neighbor)
+                queue.append(new_path)
+                if neighbor not in found_itcs and neighbor in itcs:
+                    found_itcs.append(neighbor)
+            visited.append(node)
+ 
+    return found_itcs
 
 # ----- system security math -----
 
@@ -350,6 +416,8 @@ def help():
                 'Multi-stop route:                                      `@jumpbot Taisy Alikara Jita`\n'
                 'Show all hops in a path:                          `@jumpbot path taisy alikara`\n'
                 'Find a safer path (if possible):               `@jumpbot taisy czdj safe`\n'
+                'Find the closest non-nullsec system:   `@jumpbot evac czdj`\n'
+                'Find the closest ITC:                                `@jumpbot itc taisy`\n'
                 'Autocomplete:                                          `@jumpbot alik ostin`\n'
                 'Partial match suggestions:                     `@jumpbot vv`\n\n'
                 '_jumpbot is case-insensitive_\n'
@@ -467,9 +535,11 @@ def fleetping_trigger(message):
     for word in words:
         if is_valid_system(word):
             if fixup_system_name(word) not in popular_systems:
-                response += calc_from_popular(word)
-                if len(response) > 1:
-                    response += '\n'
+                system_sec = get_rounded_sec(fixup_system_name(word))
+                if get_sec_status(system_sec) == 'nullsec':     # only respond to nullsec fleetping systems. too many false positives.
+                    response += calc_from_popular(word)
+                    if len(response) > 1:
+                        response += '\n'
         else:
             # only check words longer than 3 chars or we start false positive matching english words (e.g. 'any' -> Anyed)
             if len(word) > 3 and word.lower() not in fuzzy_match_denylist:
@@ -485,6 +555,37 @@ def fleetping_trigger(message):
     else:
         write_log('fleetping-noöp', message)
         return
+
+
+def closest_safe_response(system: str, include_path=False):
+    candidate, warnings = format_system(system)
+    closest = closest_safe_system(candidate)
+    path = jump_path(candidate, closest, avoid_null=False)
+    jumps = jump_count(path)
+    closest_sec = get_rounded_sec(closest)
+    response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} jumps**, in **{stars[closest]['region']}**)"
+    if include_path:
+        response += format_path_hops(candidate, closest, avoid_null=False)
+    return response
+
+
+def closest_itc_response(system: str, include_path=False):
+    itc_count = 3
+    candidate, warnings = format_system(system)
+    closest = closest_itcs(candidate, itc_count)
+    if itc_count > 2:
+        response = f"The closest {itc_count} ITCs to `{candidate}` are:"
+        for itc in closest:
+                path = jump_path(candidate, itc, avoid_null=False)
+                jumps = jump_count(path)
+                itc_sec = get_rounded_sec(itc)
+                response += f"\n`{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} jumps**, in **{stars[itc]['region']}**)"
+    elif itc_count == 1:
+        path = jump_path(candidate, itc, avoid_null=False)
+        jumps = jump_count(path)
+        itc_sec = get_rounded_sec(itc)
+        response = f"The closest {itc_count} ITC to {candidate} is `{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} jumps**, in **{stars[itc]['region']}**)`"
+    return response
 
 
 def mention_trigger(message):
@@ -513,6 +614,30 @@ def mention_trigger(message):
                 msg_args.remove(safe_string)
                 avoid_null = True           # "@jumpboth safe w-u taisy"
                 break
+
+        for arg in msg_args:
+            if any(term in arg.lower() for term in non_null_terms):
+                non_null_string = arg
+                msg_args.remove(non_null_string)
+                if len(msg_args) == 1:
+                    response = closest_safe_response(msg_args[0], include_path)
+                    write_log('evac', message)
+                    return response         # "@jumpbot evac czdj"
+                else:
+                    write_log('error-evac', message)
+                    return "?:)?"
+
+        for arg in msg_args:
+            if any(term in arg.lower() for term in itc_terms):
+                itc_string = arg
+                msg_args.remove(itc_string)
+                if len(msg_args) == 1:
+                    response = closest_itc_response(msg_args[0])
+                    write_log('itc', message)
+                    return response         # "@jumpbot itc taisy"
+                else:
+                    write_log('error-itc', message)
+                    return "?:)?"
 
     if len(msg_args) == 1:
         if 'help' in msg_args[0].lower():   # "@jumpbot help"
@@ -554,6 +679,8 @@ def init():
     flat_lookup = generate_flat_lookup(stars)
     global truesec
     truesec = parse_truesec_csv()
+    global itcs
+    itcs = parse_itc_csv()
     global graph
     if os.path.isfile(graph_save_path):
         graph = dijkstar.Graph.load(graph_save_path)
