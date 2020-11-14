@@ -136,9 +136,6 @@ def closest_safe_system(start):
 
 
 def closest_itcs(start, count):
-    if start in closest_safes:
-      return closest_safes[start]
-    
     visited = []
     queue = [[start]]
 
@@ -559,6 +556,8 @@ def fleetping_trigger(message):
 
 def closest_safe_response(system: str, include_path=False):
     candidate, warnings = format_system(system)
+    if not candidate:
+        return ''.join(warnings)
     closest = closest_safe_system(candidate)
     path = jump_path(candidate, closest, avoid_null=False)
     jumps = jump_count(path)
@@ -566,12 +565,16 @@ def closest_safe_response(system: str, include_path=False):
     response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} jumps**, in **{stars[closest]['region']}**)"
     if include_path:
         response += format_path_hops(candidate, closest, avoid_null=False)
+    if warnings:
+        response = ''.join(warnings) + response
     return response
 
 
 def closest_itc_response(system: str, include_path=False):
     itc_count = 3
     candidate, warnings = format_system(system)
+    if not candidate:
+        return ''.join(warnings)
     closest = closest_itcs(candidate, itc_count)
     if itc_count > 2:
         response = f"The closest {itc_count} ITCs to `{candidate}` are:"
@@ -585,6 +588,8 @@ def closest_itc_response(system: str, include_path=False):
         jumps = jump_count(path)
         itc_sec = get_rounded_sec(itc)
         response = f"The closest {itc_count} ITC to {candidate} is `{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} jumps**, in **{stars[itc]['region']}**)`"
+    if warnings:
+        response = ''.join(warnings) + response
     return response
 
 
