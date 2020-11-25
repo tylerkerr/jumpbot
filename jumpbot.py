@@ -543,9 +543,11 @@ def fleetping_trigger(message):
                 fuzzy = try_fuzzy_match(word)
                 if fuzzy and len(fuzzy) == 1:
                     if fixup_system_name(fuzzy[0]) not in popular_systems:
-                        response += calc_from_popular(word)
-                        if len(response) > 1:
-                            response += '\n'
+                        system_sec = get_rounded_sec(fixup_system_name(fuzzy[0]))
+                        if get_sec_status(system_sec) == 'nullsec':
+                            response += calc_from_popular(word)
+                            if len(response) > 1:
+                                response += '\n'
     if response:
         write_log('fleetping', message)
         return response
