@@ -33,6 +33,9 @@ non_null_terms = ['escape', 'evac', 'evacuate']
 # strings to trigger a search for the closest ITC
 itc_terms = ['itc', 'trade', 'market']
 
+# strings to trigger the display of either closest station or hops with stations
+station_terms = ['station', 'stations']
+
 # ----- preparation -----
 
 def parse_star_csv():
@@ -69,6 +72,12 @@ def parse_itc_csv():
                             'moon': row[2],
                             'station': row[3]}
     return itcs
+
+
+def parse_station_csv():
+    with open('data/stations.csv') as stationcsv:
+        stations = stationcsv.read().splitlines()
+    return stations
 
 def generate_graph(stars):
     graph = dijkstar.Graph()
@@ -155,6 +164,27 @@ def closest_itcs(start, count):
             visited.append(node)
  
     return found_itcs
+
+def closest_stations(start, count):
+    visited = []
+    queue = [[start]]
+
+    found_stations = []
+
+    while queue and len(found_stations) < count:
+        path = queue.pop(0)
+        node = path[-1]
+        if node not in visited:
+            neighbors = stars[node]['edges']
+            for neighbor in neighbors:
+                new_path = list(path)
+                new_path.append(neighbor)
+                queue.append(new_path)
+                if neighbor not in found_stations and neighbor in stations:
+                    found_stations.append(neighbor)
+            visited.append(node)
+ 
+    return found_stations
 
 # ----- system security math -----
 
@@ -345,7 +375,8 @@ def format_path_hops(start: str, end: str, avoid_null=False):
     hop_count = 0
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
-        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        station = "🛰️" if hop in stations else ""
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{hop} ({hop_sec}{format_sec_icon(hop_sec)}) {station}\n"
         hop_count += 1
     response += '```'
     return response
@@ -367,7 +398,8 @@ def format_multistop_path(legs: list, stops: list, avoid_null=False):
     hop_count = 0
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
-        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})\n"
+        station = "🛰️" if hop in stations else ""
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)}) {station}\n"
         hop_count += 1
 
     response += "```"
@@ -415,6 +447,7 @@ def help():
                 'Find a safer path (if possible):               `@jumpbot taisy czdj safe`\n'
                 'Find the closest non-nullsec system:   `@jumpbot evac czdj`\n'
                 'Find the closest ITC:                                `@jumpbot itc taisy`\n'
+                'Find the closest NPC station:                 `@jumpbot station UEJX-G`\n'
                 'Autocomplete:                                          `@jumpbot alik ostin`\n'
                 'Partial match suggestions:                     `@jumpbot vv`\n\n'
                 '_jumpbot is case-insensitive_\n'
@@ -595,6 +628,35 @@ def closest_itc_response(system: str, include_path=False):
     return response
 
 
+def closest_station_response(system: str, include_path=False):
+    station_count = 3
+    candidate, warnings = format_system(system)
+    if not candidate:
+        return ''.join(warnings)
+    if candidate in stations:
+        warnings += f'🛰️ `{candidate}` is a station system!\n'
+        station_count += 1
+    closest = closest_stations(candidate, station_count)
+    if candidate in stations:
+        closest.remove(candidate)
+        station_count -= 1
+    if station_count > 2:
+        response = f"The closest {station_count} stations to `{candidate}` are:"
+        for station in closest:
+                path = jump_path(candidate, station, avoid_null=False)
+                jumps = jump_count(path)
+                station_sec = get_rounded_sec(station)
+                response += f"\n`{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} jumps**, in **{stars[station]['region']}**)"
+    elif station_count == 1:
+        path = jump_path(candidate, station, avoid_null=False)
+        jumps = jump_count(path)
+        station_sec = get_rounded_sec(station)
+        response = f"The closest {station_count} station to {candidate} is `{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} jumps**, in **{stars[station]['region']}**)`"
+    if warnings:
+        response = ''.join(warnings) + response
+    return response
+
+
 def mention_trigger(message):
     try:
         msg_args = shlex.split(message.content)
@@ -646,6 +708,18 @@ def mention_trigger(message):
                     write_log('error-itc', message)
                     return "?:)?"
 
+        for arg in msg_args:
+            if any(term in arg.lower() for term in station_terms):
+                station_string = arg
+                msg_args.remove(station_string)
+                if len(msg_args) == 1:
+                    response = closest_station_response(msg_args[0], include_path)
+                    write_log('station', message)
+                    return response         # "@jumpbot station uej"
+                else:
+                    write_log('error-station', message)
+                    return "?:)?"
+
     if len(msg_args) == 1:
         if 'help' in msg_args[0].lower():   # "@jumpbot help"
             response = help()
@@ -688,6 +762,8 @@ def init():
     truesec = parse_truesec_csv()
     global itcs
     itcs = parse_itc_csv()
+    global stations
+    stations = parse_station_csv()
     global graph
     if os.path.isfile(graph_save_path):
         graph = dijkstar.Graph.load(graph_save_path)
