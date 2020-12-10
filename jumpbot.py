@@ -184,7 +184,7 @@ def closest_stations(start, count):
                     found_stations.append(neighbor)
             visited.append(node)
  
-    return found_stations
+    return found_stations[:count]   # there is a bug with 4-way-ties and this is a lazy fix
 
 # ----- system security math -----
 
