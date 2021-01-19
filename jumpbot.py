@@ -1,6 +1,7 @@
 import sys
 import os
 import csv
+import json
 import ast
 import shlex
 import time
@@ -74,10 +75,27 @@ def parse_itc_csv():
     return itcs
 
 
-def parse_station_csv():
-    with open('data/stations.csv') as stationcsv:
-        stations = stationcsv.read().splitlines()
-    return stations
+def parse_station_json():
+    with open('data/npc_stations.json') as stationjson:
+        station_json = json.load(stationjson)
+    
+    system_id_lookup = {}
+    with open('data/mapSolarSystems.csv') as galaxycsv:
+        galaxy_map = csv.DictReader(galaxycsv)
+        for row in galaxy_map:
+            system_id_lookup[row['solarSystemID']] = row['solarSystemName']
+
+    station_systems = {}
+    for station in station_json:
+        system_id = str(station_json[station]['solar_system_id'])
+        system_name = system_id_lookup[system_id]
+        if system_name in station_systems:
+            station_systems[system_name] += 1
+        else:
+            station_systems[system_name] = 1
+    
+    return station_systems
+
 
 def generate_graph(stars):
     graph = dijkstar.Graph()
@@ -181,7 +199,8 @@ def closest_stations(start, count):
                 new_path.append(neighbor)
                 queue.append(new_path)
                 if neighbor not in found_stations and neighbor in stations:
-                    found_stations.append(neighbor)
+                    if neighbor != start:
+                        found_stations.append(neighbor)
             visited.append(node)
  
     return found_stations[:count]   # there is a bug with 4-way-ties and this is a lazy fix
@@ -331,7 +350,7 @@ def format_jump_count(start: str, end: str, avoid_null=False):
     start_sec = get_rounded_sec(start)
     end_sec = get_rounded_sec(end)
     path = jump_path(start, end, avoid_null)
-    return f"`{start}` ({start_sec} {format_sec_icon(start_sec)}) to `{end}` ({end_sec} {format_sec_icon(end_sec)}): **{jump_count(path)} jumps** ({format_path_security(path['security'])})"
+    return f"`{start}` ({start_sec} {format_sec_icon(start_sec)}) to `{end}` ({end_sec} {format_sec_icon(end_sec)}): **{jump_count(path)} {jump_word(jump_count(path))}** ({format_path_security(path['security'])})"
 
 
 def format_partial_match(matches: list):
@@ -418,6 +437,13 @@ def punc_strip(word: str):
     return re_sub(punctuation_to_strip, '', word)
 
 
+def jump_word(jumps: int):
+    if jumps == 1:
+        return 'jump'
+    else:
+        return 'jumps'
+
+
 def check_response_length(response: str):
     if len(response) > 1975:
         return response[:1975] + '\nToo long! Truncating...'
@@ -494,7 +520,7 @@ def calc_e2e(start: str, end: str, include_path=False, avoid_null=False, show_ex
         if not include_path:
             response += '\n'
         if safe_nulls < unsafe_nulls:
-            response += f"_{unsafe_nulls - safe_nulls} fewer nullsec hops at the cost of {safe_hops - unsafe_hops} additional jumps_"
+            response += f"_{unsafe_nulls - safe_nulls} fewer nullsec hops at the cost of {safe_hops - unsafe_hops} additional {jump_word(safe_hops - unsafe_hops)}_"
         elif safe_nulls == unsafe_nulls:
             response += "_The shortest path is already the safest!_"
         elif safe_nulls > unsafe_nulls:
@@ -547,7 +573,7 @@ def calc_multistop(stops: list, include_path=False, avoid_null=False):
         jump_total += jump_count(path)
         response += calc_e2e(leg[0], leg[1], show_extras=False, avoid_null=avoid_null)
     if jump_total:
-        response += f"\n__**{jump_total} jumps total**__ ({nullsec_total} nullsec)"
+        response += f"\n__**{jump_total} {jump_word(jump_total)} total**__ ({nullsec_total} nullsec)"
 
     if include_path:
         multistop = format_multistop_path(legs, valid_stops, avoid_null=avoid_null)
@@ -578,6 +604,11 @@ def fleetping_trigger(message):
                     if fixup_system_name(fuzzy[0]) not in popular_systems:
                         system_sec = get_rounded_sec(fixup_system_name(fuzzy[0]))
                         if get_sec_status(system_sec) == 'nullsec':
+                            end = format_system(fuzzy[0])[0]
+                            for start in popular_systems:
+                                check_path = jump_path(start, end)
+                                if jump_count(check_path) < 5:
+                                    return
                             response += calc_from_popular(word)
                             if len(response) > 1:
                                 response += '\n'
@@ -597,7 +628,7 @@ def closest_safe_response(system: str, include_path=False):
     path = jump_path(candidate, closest, avoid_null=False)
     jumps = jump_count(path)
     closest_sec = get_rounded_sec(closest)
-    response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} jumps**, in **{stars[closest]['region']}**)"
+    response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} {jump_word(jumps)}**, in **{stars[closest]['region']}**)"
     if include_path:
         response += format_path_hops(candidate, closest, avoid_null=False)
     if warnings:
@@ -617,7 +648,7 @@ def closest_itc_response(system: str, include_path=False):
                 path = jump_path(candidate, itc, avoid_null=False)
                 jumps = jump_count(path)
                 itc_sec = get_rounded_sec(itc)
-                response += f"\n`{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} jumps**, in **{stars[itc]['region']}**)"
+                response += f"\n`{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[itc]['region']}**)"
     elif itc_count == 1:
         path = jump_path(candidate, itc, avoid_null=False)
         jumps = jump_count(path)
@@ -634,24 +665,23 @@ def closest_station_response(system: str, include_path=False):
     if not candidate:
         return ''.join(warnings)
     if candidate in stations:
-        warnings += f'🛰️ `{candidate}` is a station system!\n'
-        station_count += 1
+        station_word = 'stations' if stations[candidate] > 1 else 'station'
+        warnings += f'🛰️ `{candidate}` has **{stations[candidate]}** {station_word}\n'
     closest = closest_stations(candidate, station_count)
-    if candidate in stations:
-        closest.remove(candidate)
-        station_count -= 1
     if station_count > 2:
-        response = f"The closest {station_count} stations to `{candidate}` are:"
+        other_word = 'other ' if candidate in stations else ''
+        response = f"The closest {station_count} {other_word}station systems to `{candidate}` are:"
         for station in closest:
                 path = jump_path(candidate, station, avoid_null=False)
                 jumps = jump_count(path)
                 station_sec = get_rounded_sec(station)
-                response += f"\n`{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} jumps**, in **{stars[station]['region']}**)"
+                station_word = 'stations' if stations[station] > 1 else 'station'
+                response += f"\n`{station}` ({stations[station]} {station_word}) ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[station]['region']}**)"
     elif station_count == 1:
         path = jump_path(candidate, station, avoid_null=False)
         jumps = jump_count(path)
         station_sec = get_rounded_sec(station)
-        response = f"The closest {station_count} station to {candidate} is `{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} jumps**, in **{stars[station]['region']}**)`"
+        response = f"The closest {station_count} station to {candidate} is `{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[station]['region']}**)`"
     if warnings:
         response = ''.join(warnings) + response
     return response
@@ -763,7 +793,7 @@ def init():
     global itcs
     itcs = parse_itc_csv()
     global stations
-    stations = parse_station_csv()
+    stations = parse_station_json()
     global graph
     if os.path.isfile(graph_save_path):
         graph = dijkstar.Graph.load(graph_save_path)
