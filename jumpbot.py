@@ -15,6 +15,7 @@ from math import copysign
 # where to save a calculated graph
 graph_save_path = './data/graph.cache'
 safe_graph_save_path = './data/safe_graph.cache'
+lowsec_graph_save_path = './data/lowsec_graph.cache'
 
 # systems we don't want fuzzy matching to hit on in fleetping triggers
 fuzzy_match_denylist = ['gate', 'serpentis', 'semi', 'time', 'promise', 'vale']
@@ -25,8 +26,11 @@ punctuation_to_strip = '[.,;:!\'"]'
 # strings to trigger the output of a detailed path. important that none of these collide with systems!
 path_terms = ['path', 'detail', 'full', 'hops']
 
-# strings to trigger the output of a detailed path. important that none of these collide with systems!
-safe_terms = ['safe', 'safer', 'lowsec', 'hisec']
+# strings to trigger the output of an avoid-null path.
+safe_terms = ['safe', 'safer']
+
+# strings to trigger the output of a lowsec-only path. like for caps taking gates
+lowsec_terms = ['lowsec']
 
 # strings to trigger a search for the closest non-null system
 non_null_terms = ['escape', 'evac', 'evacuate']
@@ -122,11 +126,31 @@ def generate_safe_graph(stars):
     return safe_graph
 
 
+def generate_lowsec_graph(stars):
+    lowsec_graph = dijkstar.Graph()
+    for star in stars:
+        for edge in stars[star]['edges']:
+            edge_sec = get_rounded_sec(edge)
+            if get_sec_status(edge_sec) == 'lowsec':
+                cost = 1
+            else:
+                cost = 10000
+            lowsec_graph.add_edge(star, edge, cost)
+
+    lowsec_graph.dump(lowsec_graph_save_path)
+    return lowsec_graph
+
+
 # ----- graph crunching -----
 
-def jump_path(start: str, end: str, avoid_null=False):
+def jump_path(start: str, end: str, strategy='shortest'):
     # generate a dijkstar object describing the shortest path
-    g = safe_graph if avoid_null else graph
+    if strategy == 'shortest':
+        g = graph
+    elif strategy == 'avoid_null':
+        g = safe_graph
+    elif strategy == 'lowsec':
+        g = lowsec_graph
     path = dijkstar.find_path(g, start, end)
     security_dict = jump_path_security(path)
     return {'path': path, 'security': security_dict}
@@ -244,6 +268,14 @@ def jump_path_security(path):
     return {'hisec': hisec, 'lowsec': lowsec, 'nullsec': nullsec}
 
 
+def lowsec_only(path):
+    for node in path['path'].nodes:
+        node_sec = get_rounded_sec(node)
+        if get_sec_status(node_sec) != 'lowsec':
+            return False
+    return True
+
+
 # ----- string bashing -----
 
 def flatten(system: str):
@@ -345,11 +377,11 @@ def format_system_region(start: str, end: str):
         return f"`{start}` is in **{stars[start]['region']}**, `{end}` is in **{stars[end]['region']}**\n"
 
 
-def format_jump_count(start: str, end: str, avoid_null=False):
+def format_jump_count(start: str, end: str, strategy='shortest'):
     # assemble all of the useful info into a string for Discord
     start_sec = get_rounded_sec(start)
     end_sec = get_rounded_sec(end)
-    path = jump_path(start, end, avoid_null)
+    path = jump_path(start, end, strategy)
     return f"`{start}` ({start_sec} {format_sec_icon(start_sec)}) to `{end}` ({end_sec} {format_sec_icon(end_sec)}): **{jump_count(path)} {jump_word(jump_count(path))}** ({format_path_security(path['security'])})"
 
 
@@ -387,9 +419,9 @@ def format_system(system: str):
     return canonical_system, warnings
 
 
-def format_path_hops(start: str, end: str, avoid_null=False):
+def format_path_hops(start: str, end: str, strategy='shortest'):
     # generate the full route
-    hops = jump_path(start, end, avoid_null)['path'].nodes
+    hops = jump_path(start, end, strategy)['path'].nodes
     response = "```"
     hop_count = 0
     for hop in hops:
@@ -401,7 +433,7 @@ def format_path_hops(start: str, end: str, avoid_null=False):
     return response
 
 
-def format_multistop_path(legs: list, stops: list, avoid_null=False):
+def format_multistop_path(legs: list, stops: list, strategy='shortest'):
     # generate the full route with indicators for the specified stops
     hops = []
     response = "```"
@@ -409,9 +441,9 @@ def format_multistop_path(legs: list, stops: list, avoid_null=False):
     leg_count = 0
     for leg in legs:
         if leg_count == 0:
-            hops += jump_path(leg[0], leg[1], avoid_null)['path'].nodes
+            hops += jump_path(leg[0], leg[1], strategy)['path'].nodes
         else:
-            hops += jump_path(leg[0], leg[1], avoid_null)['path'].nodes[1:]
+            hops += jump_path(leg[0], leg[1], strategy)['path'].nodes[1:]
         leg_count += 1
 
     hop_count = 0
@@ -481,7 +513,7 @@ def help():
     return response
 
 
-def calc_e2e(start: str, end: str, include_path=False, avoid_null=False, show_extras=True):
+def calc_e2e(start: str, end: str, include_path=False, strategy='shortest', show_extras=True):
     # return jump info for a specified pair of systems
     response = ""
     warnings = []
@@ -505,16 +537,22 @@ def calc_e2e(start: str, end: str, include_path=False, avoid_null=False, show_ex
         if len(warnings) > 0:
             response += ''.join(warnings)
         response += format_system_region(canonical_start, canonical_end)
+    
+    if strategy == 'lowsec':
+        lowsec_path = jump_path(canonical_start, canonical_end, strategy='lowsec')
+        if not lowsec_only(lowsec_path):
+            response += f"**There is no lowsec-only path between {canonical_start} and {canonical_end}!**"
+            return response + '\n'
 
-    response += f"{format_jump_count(canonical_start, canonical_end, avoid_null)}"
+    response += f"{format_jump_count(canonical_start, canonical_end, strategy)}"
 
     if include_path:
-        response += format_path_hops(canonical_start, canonical_end, avoid_null)
-    if avoid_null:
-        safe_path = jump_path(canonical_start, canonical_end, avoid_null=True)
+        response += format_path_hops(canonical_start, canonical_end, strategy)
+    if strategy == 'avoid_null':
+        safe_path = jump_path(canonical_start, canonical_end, strategy='avoid_null')
         safe_hops = jump_count(safe_path)
         safe_nulls = safe_path['security']['nullsec']
-        unsafe_path = jump_path(canonical_start, canonical_end, avoid_null=False)
+        unsafe_path = jump_path(canonical_start, canonical_end, strategy='shortest')
         unsafe_hops = jump_count(unsafe_path)
         unsafe_nulls = unsafe_path['security']['nullsec']
         if not include_path:
@@ -525,6 +563,17 @@ def calc_e2e(start: str, end: str, include_path=False, avoid_null=False, show_ex
             response += "_The shortest path is already the safest!_"
         elif safe_nulls > unsafe_nulls:
             response += "_Somehow it's shorter to fly safer? Something is wrong_"
+    if strategy == 'lowsec':
+        if not include_path:
+            response += '\n'
+        shortest_path = jump_path(canonical_start, canonical_end, strategy='shortest')
+        shortest_hops = jump_count(shortest_path)
+        lowsec_hops = jump_count(lowsec_path)
+        if lowsec_hops == shortest_hops:
+            response += "_The lowsec path is also the shortest path._"
+        if lowsec_hops > shortest_hops:
+            response += f"_The lowsec-only path is {lowsec_hops - shortest_hops} extra hops_"
+
     return response + '\n'
 
 
@@ -540,7 +589,7 @@ def calc_from_popular(end: str):
     return response
 
 
-def calc_multistop(stops: list, include_path=False, avoid_null=False):
+def calc_multistop(stops: list, include_path=False, strategy='shortest'):
     # return jump info for an arbitrary amount of stops
     valid_stops = []
     warnings = []
@@ -568,19 +617,19 @@ def calc_multistop(stops: list, include_path=False, avoid_null=False):
     jump_total = 0
     nullsec_total = 0
     for leg in legs:
-        path = jump_path(leg[0], leg[1], avoid_null=avoid_null)
+        path = jump_path(leg[0], leg[1], strategy)
         nullsec_total += path['security']['nullsec']
         jump_total += jump_count(path)
-        response += calc_e2e(leg[0], leg[1], show_extras=False, avoid_null=avoid_null)
+        response += calc_e2e(leg[0], leg[1], show_extras=False, strategy=strategy)
     if jump_total:
         response += f"\n__**{jump_total} {jump_word(jump_total)} total**__ ({nullsec_total} nullsec)"
 
     if include_path:
-        multistop = format_multistop_path(legs, valid_stops, avoid_null=avoid_null)
+        multistop = format_multistop_path(legs, valid_stops, strategy)
         if len(response + multistop) > 2000:
             response += "\n_Can't show the full path - too long for a single Discord message_ :("
         else:
-            response += format_multistop_path(legs, valid_stops, avoid_null=avoid_null)
+            response += format_multistop_path(legs, valid_stops, strategy)
 
     return response
 
@@ -625,12 +674,12 @@ def closest_safe_response(system: str, include_path=False):
     if not candidate:
         return ''.join(warnings)
     closest = closest_safe_system(candidate)
-    path = jump_path(candidate, closest, avoid_null=False)
+    path = jump_path(candidate, closest, strategy='shortest')
     jumps = jump_count(path)
     closest_sec = get_rounded_sec(closest)
     response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} {jump_word(jumps)}**, in **{stars[closest]['region']}**)"
     if include_path:
-        response += format_path_hops(candidate, closest, avoid_null=False)
+        response += format_path_hops(candidate, closest, strategy='shortest')
     if warnings:
         response = ''.join(warnings) + response
     return response
@@ -645,12 +694,12 @@ def closest_itc_response(system: str, include_path=False):
     if itc_count > 2:
         response = f"The closest {itc_count} ITCs to `{candidate}` are:"
         for itc in closest:
-                path = jump_path(candidate, itc, avoid_null=False)
+                path = jump_path(candidate, itc, strategy='shortest')
                 jumps = jump_count(path)
                 itc_sec = get_rounded_sec(itc)
                 response += f"\n`{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[itc]['region']}**)"
     elif itc_count == 1:
-        path = jump_path(candidate, itc, avoid_null=False)
+        path = jump_path(candidate, itc, strategy='shortest')
         jumps = jump_count(path)
         itc_sec = get_rounded_sec(itc)
         response = f"The closest {itc_count} ITC to {candidate} is `{itc}` ({itc_sec} {format_sec_icon(itc_sec)}): (**{jumps} jumps**, in **{stars[itc]['region']}**)`"
@@ -672,13 +721,13 @@ def closest_station_response(system: str, include_path=False):
         other_word = 'other ' if candidate in stations else ''
         response = f"The closest {station_count} {other_word}station systems to `{candidate}` are:"
         for station in closest:
-                path = jump_path(candidate, station, avoid_null=False)
+                path = jump_path(candidate, station, strategy='shortest')
                 jumps = jump_count(path)
                 station_sec = get_rounded_sec(station)
                 station_word = 'stations' if stations[station] > 1 else 'station'
                 response += f"\n`{station}` ({stations[station]} {station_word}) ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[station]['region']}**)"
     elif station_count == 1:
-        path = jump_path(candidate, station, avoid_null=False)
+        path = jump_path(candidate, station, strategy='shortest')
         jumps = jump_count(path)
         station_sec = get_rounded_sec(station)
         response = f"The closest {station_count} station to {candidate} is `{station}` ({station_sec} {format_sec_icon(station_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[station]['region']}**)`"
@@ -698,7 +747,7 @@ def mention_trigger(message):
             msg_args.remove(arg)
 
     include_path = False
-    avoid_null = False
+    strategy = 'shortest'
     if len(msg_args) >= 2:  # figure out if they want us to include all hops in the path
         for arg in msg_args:
             if any(term in arg.lower() for term in path_terms):
@@ -711,7 +760,14 @@ def mention_trigger(message):
             if any(term in arg.lower() for term in safe_terms):
                 safe_string = arg
                 msg_args.remove(safe_string)
-                avoid_null = True           # "@jumpboth safe w-u taisy"
+                strategy = 'avoid_null'           # "@jumpboth safe w-u taisy"
+                break
+
+        for arg in msg_args:
+            if any(term in arg.lower() for term in lowsec_terms):
+                lowsec_string = arg
+                msg_args.remove(lowsec_string)
+                strategy = 'lowsec'           # "@jumpboth lowsec hophib ned"
                 break
 
         for arg in msg_args:
@@ -760,7 +816,7 @@ def mention_trigger(message):
                 response += "\n_provide both a start and an end if you want to see the full path :)_"
             write_log('popular', message)
     elif len(msg_args) == 2:                # "@jumpbot Taisy Alikara"
-        response = calc_e2e(msg_args[0], msg_args[1], include_path, avoid_null)
+        response = calc_e2e(msg_args[0], msg_args[1], include_path, strategy)
         write_log('e2e-withpath' if include_path else 'e2e', message)
     elif len(msg_args) >= 3:                # "@jumpbot D7 jita ostingele
         if len(msg_args) > 24:
@@ -768,7 +824,7 @@ def mention_trigger(message):
             write_log('error-long', message)
         else:
             try:
-                response = calc_multistop(msg_args, include_path, avoid_null)
+                response = calc_multistop(msg_args, include_path, strategy)
                 write_log('multistop-withpath' if include_path else 'multistop', message)
             except Exception as e:
                 response = "?:)"
@@ -804,6 +860,11 @@ def init():
         safe_graph = dijkstar.Graph.load(safe_graph_save_path)
     else:
         safe_graph = generate_safe_graph(stars)
+    global lowsec_graph
+    if os.path.isfile(lowsec_graph_save_path):
+        lowsec_graph = dijkstar.Graph.load(lowsec_graph_save_path)
+    else:
+        lowsec_graph = generate_lowsec_graph(stars)
     global popular_systems
     popular_systems = ast.literal_eval(
         os.environ.get("JUMPBOT_POPULAR_SYSTEMS"))
