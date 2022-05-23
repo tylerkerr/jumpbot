@@ -503,6 +503,7 @@ def help():
                 'Multi-stop route:                                      `@jumpbot Taisy Alikara Jita`\n'
                 'Show all hops in a path:                          `@jumpbot path taisy alikara`\n'
                 'Find a safer path (if possible):               `@jumpbot taisy czdj safe`\n'
+                'Find a lowsec-only path (for caps):      `@jumpbot keri access lowsec`\n'
                 'Find the closest non-nullsec system:   `@jumpbot evac czdj`\n'
                 'Find the closest ITC:                                `@jumpbot itc taisy`\n'
                 'Find the closest NPC station:                 `@jumpbot station UEJX-G`\n'
@@ -572,7 +573,7 @@ def calc_e2e(start: str, end: str, include_path=False, strategy='shortest', show
         if lowsec_hops == shortest_hops:
             response += "_The lowsec path is also the shortest path._"
         if lowsec_hops > shortest_hops:
-            response += f"_The lowsec-only path is {lowsec_hops - shortest_hops} extra hops_"
+            response += f"_The lowsec-only path is {lowsec_hops - shortest_hops} extra {jump_word(lowsec_hops - shortest_hops)}_"
 
     return response + '\n'
 
