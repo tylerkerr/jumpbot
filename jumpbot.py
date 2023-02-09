@@ -896,7 +896,7 @@ def main():
         print("[!] Missing environment variable!")
         sys.exit(1)
 
-    client = discord.Client()
+    client = discord.Client(intents=discord.Intents.default())
 
     @client.event
     async def on_ready():
