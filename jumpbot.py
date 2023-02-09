@@ -160,16 +160,16 @@ def jump_count(path):
     # the number of jumps between two systems
     return len(path['path'].nodes) - 1  # don't include the starting node
 
-closest_safes = {}
-def closest_safe_system(start):
+
+def closest_safe_systems(start, count):
     # breadth first search to identify the closest non-nullsec system
-    if start in closest_safes:
-      return closest_safes[start]
-    
+
     visited = []
     queue = [[start]]
+
+    found_evacs = []
  
-    while queue:
+    while queue and len(found_evacs) < count:
         path = queue.pop(0)
         node = path[-1]
         if node not in visited:
@@ -179,11 +179,10 @@ def closest_safe_system(start):
                 new_path.append(neighbor)
                 queue.append(new_path)
                 if get_sec_status(get_rounded_sec(neighbor)) != 'nullsec':
-                    closest_safes[start] = neighbor
-                    return neighbor
+                    found_evacs.append(neighbor)
             visited.append(node)
  
-    return False
+    return found_evacs
 
 
 def closest_itcs(start, count):
@@ -671,16 +670,25 @@ def fleetping_trigger(message):
 
 
 def closest_safe_response(system: str, include_path=False):
+    evac_count = 3
     candidate, warnings = format_system(system)
     if not candidate:
         return ''.join(warnings)
-    closest = closest_safe_system(candidate)
-    path = jump_path(candidate, closest, strategy='shortest')
-    jumps = jump_count(path)
-    closest_sec = get_rounded_sec(closest)
-    response = f"The closest non-nullsec system to `{candidate}` is `{closest}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} {jump_word(jumps)}**, in **{stars[closest]['region']}**)"
+    evacs = closest_safe_systems(candidate, evac_count)
+    if evac_count > 1:
+        response = f"The closest {evac_count} ITCs to `{candidate}` are:"
+        for evac in evacs:
+                path = jump_path(candidate, evac, strategy='shortest')
+                jumps = jump_count(path)
+                evac_sec = get_rounded_sec(evac)
+                response += f"\n`{evac}` ({evac_sec} {format_sec_icon(evac_sec)}): (**{jumps} {jump_word(jumps)}**, in **{stars[evac]['region']}**)"
+    elif evac_count == 1:
+        path = jump_path(candidate, evacs[0], strategy='shortest')
+        jumps = jump_count(path)
+        closest_sec = get_rounded_sec(evacs[0])
+        response = f"The closest non-nullsec system to `{candidate}` is `{evacs[0]}` ({closest_sec} {format_sec_icon(closest_sec)}) (**{jumps} {jump_word(jumps)}**, in **{stars[evacs[0]]['region']}**)"
     if include_path:
-        response += format_path_hops(candidate, closest, strategy='shortest')
+        response += format_path_hops(candidate, evacs[0], strategy='shortest')
     if warnings:
         response = ''.join(warnings) + response
     return response
@@ -692,7 +700,7 @@ def closest_itc_response(system: str, include_path=False):
     if not candidate:
         return ''.join(warnings)
     closest = closest_itcs(candidate, itc_count)
-    if itc_count > 2:
+    if itc_count > 1:
         response = f"The closest {itc_count} ITCs to `{candidate}` are:"
         for itc in closest:
                 path = jump_path(candidate, itc, strategy='shortest')
