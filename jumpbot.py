@@ -172,7 +172,7 @@ def closest_safe_systems(start, count):
     while queue and len(found_evacs) < count:
         path = queue.pop(0)
         node = path[-1]
-        if node not in visited:
+        if node not in visited and node not in found_evacs:
             neighbors = stars[node]['edges']
             for neighbor in neighbors:
                 new_path = list(path)
