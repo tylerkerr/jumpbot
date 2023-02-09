@@ -670,13 +670,13 @@ def fleetping_trigger(message):
 
 
 def closest_safe_response(system: str, include_path=False):
-    evac_count = 3
+    evac_count = 1
     candidate, warnings = format_system(system)
     if not candidate:
         return ''.join(warnings)
     evacs = closest_safe_systems(candidate, evac_count)
     if evac_count > 1:
-        response = f"The closest {evac_count} ITCs to `{candidate}` are:"
+        response = f"The closest {evac_count} empire systems to `{candidate}` are:"
         for evac in evacs:
                 path = jump_path(candidate, evac, strategy='shortest')
                 jumps = jump_count(path)
