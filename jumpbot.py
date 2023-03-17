@@ -10,7 +10,8 @@ import dijkstar
 import discord
 import itertools
 from re import sub as re_sub
-from math import copysign
+from math import copysign, dist
+from collections import defaultdict
 
 # where to save a calculated graph
 graph_save_path = './data/graph.cache'
@@ -77,6 +78,52 @@ def parse_itc_csv():
                             'moon': row[2],
                             'station': row[3]}
     return itcs
+
+
+def generate_system_lookup():
+    system_name_lookup = {}
+    with open('data/mapSolarSystems.csv') as galaxycsv:
+        galaxy_map = csv.DictReader(galaxycsv)
+        for row in galaxy_map:
+            system_name_lookup[row['solarSystemID']] = row['solarSystemName']
+    return system_name_lookup
+
+
+def parse_gate_csv():
+    gates = {}
+    with open('data/stargates.csv') as gatecsv:
+        csvreader = csv.reader(gatecsv, quotechar='"')
+        for row in csvreader:
+            gate_id = row[0]
+            system_id = row[3]
+            gate_coords = (row[7], row[8], row[9])
+            system_name = system_name_lookup[system_id]
+            desto_gate_id = gate_desto_lookup[gate_id]
+            gates[gate_id] = {'coords': gate_coords,
+                              'system_name': system_name,
+                              'desto_gate_id': desto_gate_id}
+        return gates
+
+
+def generate_desto_lookup():
+    gate_desto_lookup = {}
+    with open('data/mapJumps.csv') as galaxycsv:
+        galaxy_map = csv.DictReader(galaxycsv)
+        for row in galaxy_map:
+            gate_desto_lookup[row['stargateID']] = row['destinationID']
+    return gate_desto_lookup
+
+
+def generate_gate_list(gates):
+    gates_by_system = defaultdict()
+    for gate in gates:
+        current_sys_name = gates[gate]['system_name']
+        desto_gate_id = gate_desto_lookup[gate]
+        desto_sys_name = gates[desto_gate_id]['system_name']
+        if current_sys_name not in gates_by_system:
+            gates_by_system[current_sys_name] = {}
+        gates_by_system[current_sys_name][desto_sys_name] = gates[gate]['coords']
+    return gates_by_system
 
 
 def parse_station_json():
@@ -275,6 +322,29 @@ def lowsec_only(path):
     return True
 
 
+def get_warp_distance(current_sys, prev_sys, next_sys):
+    if not next_sys in gates_by_system[current_sys] or not prev_sys in gates_by_system[current_sys]:
+        return False
+    ingate = tuple(int(float(c)) for c in gates_by_system[current_sys][prev_sys])
+    outgate = tuple(int(float(c)) for c in gates_by_system[current_sys][next_sys])
+    return dist(ingate, outgate)
+
+
+def meters_to_au(meters):
+    constant = 149597870700
+    au = meters / constant
+    if au >= 0.1:
+        dist_str = f' {round(au, 2)} AU'
+        if au > 300:
+            dist_str += ' ❗❗❗'
+        elif au > 200:
+            dist_str += ' ❗❗'
+        elif au > 100:
+            dist_str += ' ❗'
+        return dist_str
+    else:
+        return f' {round(meters / 1000):,} km'
+
 # ----- string bashing -----
 
 def flatten(system: str):
@@ -426,7 +496,15 @@ def format_path_hops(start: str, end: str, strategy='shortest'):
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
         station = "🛰️" if hop in stations else ""
-        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{hop} ({hop_sec}{format_sec_icon(hop_sec)}) {station}\n"
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})"
+        if hop_count > 0 and hop_count < len(hops) - 1:
+            distance = get_warp_distance(hop, hops[hop_count-1], hops[hop_count+1])
+            if not distance:
+                dist_str = ' ?'
+            else:
+                dist_str = meters_to_au(distance)
+            response += dist_str
+        response += f' {station}\n'
         hop_count += 1
     response += '```'
     return response
@@ -449,7 +527,15 @@ def format_multistop_path(legs: list, stops: list, strategy='shortest'):
     for hop in hops:
         hop_sec = get_rounded_sec(hop)
         station = "🛰️" if hop in stations else ""
-        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)}) {station}\n"
+        response += f"{hop_count}){'  ' if hop_count < 10 else ' '}{'🛑 ' if hop in stops[1:-1] and hop_count != 0 and hop_count != len(hops) - 1 else '   '}{hop} ({hop_sec}{format_sec_icon(hop_sec)})"
+        if hop_count > 0 and hop_count < len(hops) - 1:
+            distance = get_warp_distance(hop, hops[hop_count-1], hops[hop_count+1])
+            if not distance:
+                dist_str = ' ?'
+            else:
+                dist_str = meters_to_au(distance)
+            response += dist_str
+        response += f" {station}\n"
         hop_count += 1
 
     response += "```"
@@ -476,8 +562,8 @@ def jump_word(jumps: int):
 
 
 def check_response_length(response: str):
-    if len(response) > 1975:
-        return response[:1975] + '\nToo long! Truncating...'
+    if len(response) > 1972:
+        return response[:1972] + '```\nToo long! Truncating...'
     return response
 
 
@@ -859,6 +945,13 @@ def init():
     itcs = parse_itc_csv()
     global stations
     stations = parse_station_json()
+    global system_name_lookup
+    system_name_lookup = generate_system_lookup()
+    global gate_desto_lookup
+    gate_desto_lookup = generate_desto_lookup()
+    stargates = parse_gate_csv()
+    global gates_by_system
+    gates_by_system = generate_gate_list(stargates)
     global graph
     if os.path.isfile(graph_save_path):
         graph = dijkstar.Graph.load(graph_save_path)
